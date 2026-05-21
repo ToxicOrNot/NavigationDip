@@ -1,0 +1,26 @@
+<svg width="514" height="514" viewBox="0 0 514 514" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="new-plan" clip-path="url(#clip0_56_19)">
+<rect id="pr1309" x="356" y="147" width="151" height="360" fill="#3B3C41"/>
+<rect id="pr1334" x="7" y="147" width="151" height="360" fill="#3B3C41"/>
+<rect id="pr1315" x="7" y="7" width="500" height="150" fill="#3B3C41"/>
+<rect id="Rectangle 1" x="212" y="252" width="90" height="210" fill="#424242" stroke="#D9D9D9" stroke-width="10"/>
+<path id="Rectangle 5" d="M7 7H507V507H7V7Z" stroke="#D9D9D9" stroke-width="14"/>
+<path id="Vector 1" d="M7 152L237 152" stroke="#D9D9D9" stroke-width="10"/>
+<path id="Vector 2" d="M277 152H507" stroke="#D9D9D9" stroke-width="10"/>
+<path id="Vector 5" d="M153 157L153 367" stroke="#D9D9D9" stroke-width="10"/>
+<path id="Vector 5_2" d="M153 407L153 507" stroke="#D9D9D9" stroke-width="10"/>
+<path id="Vector 6" d="M361 507L361 297" stroke="#D9D9D9" stroke-width="10"/>
+<path id="Vector 7" d="M361 257L361 157" stroke="#D9D9D9" stroke-width="10"/>
+<circle id="pr1309-v1" cx="361" cy="277" r="10" fill="#9CBBFF" fill-opacity="0.05"/>
+<circle id="pr1334-v1" cx="153" cy="387" r="10" fill="#9CBBFF" fill-opacity="0.05"/>
+<circle id="pr1315-v1" cx="257" cy="152" r="10" fill="#9CBBFF" fill-opacity="0.05"/>
+<text id="t-pr1309" fill="#D9D9D9" xml:space="preserve" style="white-space: pre" font-family="GothamSSm" font-size="24" font-weight="bold" letter-spacing="0em"><tspan x="393.031" y="336.62">&#x41f;&#x420; 1309</tspan></text>
+<text id="t-pr1334" fill="#D9D9D9" xml:space="preserve" style="white-space: pre" font-family="GothamSSm" font-size="24" font-weight="bold" letter-spacing="0em"><tspan x="45.3516" y="336.62">&#x41f;&#x420; 1334</tspan></text>
+<text id="t-pr1315" fill="#D9D9D9" xml:space="preserve" style="white-space: pre" font-family="GothamSSm" font-size="24" font-weight="bold" letter-spacing="0em"><tspan x="222.184" y="91.62">&#x41f;&#x420; 1315</tspan></text>
+</g>
+<defs>
+<clipPath id="clip0_56_19">
+<rect width="514" height="514" fill="white"/>
+</clipPath>
+</defs>
+</svg>

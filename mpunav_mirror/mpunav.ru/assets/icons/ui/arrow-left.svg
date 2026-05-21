@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="yandex-verification" content="8755f23652bde319" />
+    <meta name="google-site-verification" content="iwPZYvxDo8LAogQ2zxvP8Ae0gahegPP5hP1MIGtQ1n0" />
+    <title>Политех Навигация</title>
+    <link rel="icon" sizes="192x192" href="/img/favicon/favicon-192.png" type="image/png" />
+    <link rel="shortcut icon" sizes="32x32" href="/img/favicon/favicon-32.png" type="image/png" />
+    <meta name="theme-color" content="#131416" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/img/favicon/apple-touch-icon.png" />
+    <script defer>
+      let isTouch = false
+
+      // window.visualViewport.addEventListener('resize', (event) => {
+      //   let height = event.target.height
+      //   let scale = event.target.scale
+      //   document.body.style.height = height * scale + 'px'
+      // })
+      //
+      // window.addEventListener('scroll', (event) => {
+      //   if (!isTouch) {
+      //     window.scrollTo(0, 0)
+      //   }
+      // })
+      //
+      // window.addEventListener('touchend', (e) => {
+      //   if (e.touches.length === 0) {
+      //     isTouch = false
+      //   }
+      //   window.scrollTo(0, 0)
+      // })
+      //
+      // window.addEventListener('touchstart', () => {
+      //   isTouch = true
+      // })
+    </script>
+    <script type="module" crossorigin src="/assets/index-DdiW57qr.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-XC73TU2x.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

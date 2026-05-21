@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport"
+				content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+	<meta http-equiv="X-UA-Compatible" content="ie=edge">
+	<title>Navigation</title>
+	<link href="css/style.css" rel="stylesheet">
+	<link href="resources/icon.png" rel="shortcut icon" type="image/png">
+	<script defer src="./js/navigation-app.js"></script>
+</head>
+<body>
+<section class="section-main">
+	<div class="map-switcher">
+		<label for="map-select">Карта</label>
+		<select id="map-select">
+			<option value="a-2">Корпус А · 2 этаж</option>
+			<option value="a-1">Корпус А · 1 этаж</option>
+			<option value="pk-24">ПК-24</option>
+		</select>
+	</div>
+
+	<div class="map-wrapper">
+		<div class="scale-able map-objects">
+			<div class="drag-able">
+				<svg class="svg-way" fill="none" xmlns="http://www.w3.org/2000/svg">
+					<defs>
+						<marker fill="none" id="end-arrow" orient="auto-start-reverse" refX="6" refY="6" viewBox="0 0 10 12">
+							<path d="M0 0L10 6L0 12L3 6L0 0Z" fill="#3CD288"/>
+						</marker>
+						<marker id="start-dot" refX="5" refY="5" viewBox="0 0 10 10">
+							<circle cx="5" cy="5" fill="#3CD288" r="5"/>
+						</marker>
+					</defs>
+				</svg>
+				<object class="graph" title="graph" style="visibility: hidden" type="image/svg+xml"></object>
+				<object class="plan-object" style="width: 0; height: 0; overflow: hidden" title="plan" type="image/svg+xml"></object>
+				<svg class="graph-markers" fill="none" xmlns="http://www.w3.org/2000/svg"></svg>
+			</div>
+		</div>
+		<div class="scale-buttons">
+			<div class="button-plus button"><p>+</p></div>
+			<div class="button-minus button"><p>−</p></div>
+		</div>
+	</div>
+
+	<div class="selector">
+		<div class="button-from button">
+			<img alt="" src="resources/img/from.svg"/>
+			Отсюда
+		</div>
+		<div class="button-to button">
+			<img alt="" src="resources/img/to.svg"/>
+			Сюда
+		</div>
+	</div>
+
+	<div class="menu">
+		<div class="menu-tabs">
+			<button class="menu-tab button active-tab" data-tab="navigation">Навигация</button>
+			<button class="menu-tab button" data-tab="schedule">Расписание</button>
+		</div>
+
+		<div class="menu-panel active-panel" data-panel="navigation">
+			<button class="erase button non-active-button">Очистить</button>
+			<button class="tracing button">Трассировка</button>
+			<button class="create-list-of-vertexes button non-active-button">Список вершин</button>
+			<button class="fill-graph button non-active-button">Заполнить граф</button>
+			<button class="fill-auditoriums-vertexes button non-active-button">Список вершин аудиторий</button>
+			<button class="tracing-cross button non-active-button">Трассировка пересекающихся линий</button>
+			<button class="hide-graph button">Скрыть граф</button>
+			<button class="show-graph button non-active-button">Показать граф</button>
+
+			<div class="select-points">
+				<div class="input-row">
+					<label for="input-idPoint1">1:</label>
+					<input id="input-idPoint1" name="idPoint1" type="text">
+				</div>
+				<div class="input-row">
+					<label for="input-idPoint2">2:</label>
+					<input id="input-idPoint2" name="idPoint2" type="text">
+				</div>
+				<button class="get-way button">Проложить</button>
+				<p class="output-found-way"></p>
+			</div>
+
+			<div class="selector-auditoriums">
+				<div class="input-row">
+					<label for="input-from"><img alt="" src="resources/img/from.svg"/></label>
+					<input id="input-from" name="input-from" placeholder="Откуда" type="text">
+				</div>
+				<div class="input-row">
+					<label for="input-to"><img alt="" src="resources/img/to.svg"/></label>
+					<input id="input-to" name="input-to" placeholder="Куда" type="text">
+				</div>
+				<button class="build-way button non-active-button">Построить</button>
+				<p class="output-way-between-au"></p>
+			</div>
+		</div>
+
+		<div class="menu-panel" data-panel="schedule">
+			<div class="group-schedule">
+				<div class="input-row">
+					<label for="input-group-schedule">Группа</label>
+					<input id="input-group-schedule" list="group-suggestions" name="input-group-schedule" placeholder="Например, 221-321" type="text">
+					<datalist id="group-suggestions"></datalist>
+				</div>
+				<button class="load-group-schedule button">Показать расписание</button>
+				<button class="refresh-group-list button">Обновить список групп</button>
+				<p class="schedule-status"></p>
+				<div class="schedule-output"></div>
+			</div>
+		</div>
+	</div>
+
+	<table style="display: none">
+		<caption>Список рёбер</caption>
+		<thead>
+		<tr>
+			<th>id</th>
+			<th>x1</th>
+			<th>y1</th>
+			<th>x2</th>
+			<th>y2</th>
+			<th>weight</th>
+			<th>type</th>
+		</tr>
+		</thead>
+		<tbody class="list-of-edges"></tbody>
+	</table>
+</section>
+</body>
+</html>
