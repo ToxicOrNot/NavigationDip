@@ -138,15 +138,22 @@ function setupRouteInputs() {
 	for (const input of [dom.inputFrom, dom.inputTo]) {
 		input.setAttribute('list', 'room-suggestions')
 		input.removeAttribute('readonly')
-		input.addEventListener('change', () => applyRouteInput(input))
+		input.addEventListener('change', () => {
+			if (applyRouteInput(input)) buildRouteIfReady()
+		})
+		input.addEventListener('input', () => {
+			const roomId = resolveRoomInput(input.value)
+			if (!roomId) return
+			if (applyRouteInput(input)) buildRouteIfReady()
+		})
 		input.addEventListener('keydown', event => {
 			if (event.key === 'Enter') {
 				event.preventDefault()
-				applyRouteInput(input)
-				buildRouteBetweenSelectedRooms()
+				if (applyRouteInput(input)) buildRouteIfReady()
 			}
 		})
 	}
+	updateRouteControlsState()
 }
 
 function prepareNavigationData() {
@@ -301,20 +308,33 @@ function selectClickedRoomAs(direction) {
 	updateRouteInputsFromSelection()
 	hideRoomSelector()
 	state.planModel?.syncSelection()
+	updateRouteControlsState()
 
-	if (state.routeSelection.fromId && state.routeSelection.toId) {
-		buildRouteBetweenSelectedRooms()
-	}
+	buildRouteIfReady()
 }
 
 function applyRouteInput(input) {
 	const direction = input === dom.inputFrom ? 'fromId' : 'toId'
+	if (!input.value.trim()) {
+		state.routeSelection[direction] = undefined
+		state.currentRoute = null
+		clearRouteDrawing()
+		state.planModel?.syncSelection()
+		updateRouteControlsState()
+		return false
+	}
+
 	const roomId = resolveRoomInput(input.value)
-	if (!roomId) return
+	if (!roomId) {
+		updateRouteControlsState()
+		return false
+	}
 
 	state.routeSelection[direction] = roomId
 	updateRouteInputsFromSelection()
 	state.planModel?.syncSelection()
+	updateRouteControlsState()
+	return true
 }
 
 function resolveRoomInput(value) {
@@ -339,6 +359,19 @@ function updateRouteInputsFromSelection() {
 		: ''
 }
 
+function updateRouteControlsState() {
+	const hasFrom = Boolean(state.routeSelection.fromId)
+	const hasTo = Boolean(state.routeSelection.toId)
+	dom.buildButton.classList.toggle('non-active-button', !(hasFrom && hasTo))
+	dom.eraseButton.classList.toggle('non-active-button', !(hasFrom || hasTo || state.currentRoute))
+}
+
+function buildRouteIfReady() {
+	if (state.routeSelection.fromId && state.routeSelection.toId) {
+		buildRouteBetweenSelectedRooms()
+	}
+}
+
 function buildRouteBetweenSelectedRooms() {
 	applyRouteInput(dom.inputFrom)
 	applyRouteInput(dom.inputTo)
@@ -349,11 +382,13 @@ function buildRouteBetweenSelectedRooms() {
 	if (!fromId || !toId) {
 		setRouteStatus('Выберите две аудитории')
 		clearRouteDrawing()
+		updateRouteControlsState()
 		return
 	}
 	if (fromId === toId) {
 		setRouteStatus('Выбрана одна и та же аудитория')
 		clearRouteDrawing()
+		updateRouteControlsState()
 		return
 	}
 
@@ -361,6 +396,7 @@ function buildRouteBetweenSelectedRooms() {
 	if (!result.way.length || !Number.isFinite(result.distance)) {
 		setRouteStatus('Маршрут не найден')
 		clearRouteDrawing()
+		updateRouteControlsState()
 		return
 	}
 
@@ -379,6 +415,7 @@ function buildRouteBetweenSelectedRooms() {
 	} else {
 		drawCurrentRouteSegments()
 	}
+	updateRouteControlsState()
 }
 
 function buildRouteSteps(way) {
@@ -467,6 +504,7 @@ function clearRoute() {
 	dom.routeDetails.replaceChildren()
 	clearRouteDrawing()
 	state.planModel?.syncSelection()
+	updateRouteControlsState()
 }
 
 function setRouteStatus(text) {
