@@ -8,6 +8,28 @@ const WAY_WIDTH = '4px'
 const STAIR_UP_WEIGHT = 1085
 const STAIR_DOWN_WEIGHT = 916
 const ROUTEABLE_VERTEX_TYPES = new Set(['hallway', 'lift', 'stair', 'corpusTransition', 'crossingSpace'])
+const SCHEDULE_API_BASE = './api/schedule'
+const LESSON_TIMES = {
+	0: {
+		1: '09:00-10:30',
+		2: '10:40-12:10',
+		3: '12:20-13:50',
+		4: '14:30-16:00',
+		5: '16:10-17:40',
+		6: '17:50-19:20',
+		7: '19:30-21:00',
+	},
+	1: {
+		1: '09:00-10:30',
+		2: '10:40-12:10',
+		3: '12:20-13:50',
+		4: '14:30-16:00',
+		5: '16:10-17:40',
+		6: '18:20-19:40',
+		7: '19:50-21:10',
+	},
+}
+const SCHEDULE_DAY_LABELS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
 
 const dom = {}
 const state = {
@@ -27,9 +49,12 @@ const state = {
 		fromId: undefined,
 		toId: undefined,
 	},
-	scheduleDatasetsCache: new Map(),
+	scheduleApiCache: new Map(),
 	availableGroups: [],
 	groupsLoaded: false,
+	scheduleMode: 'semester',
+	scheduleGroupsMeta: null,
+	scheduleRoomIndex: new Map(),
 }
 
 document.addEventListener('DOMContentLoaded', init)
@@ -56,10 +81,14 @@ async function init() {
 }
 
 function cacheDom() {
+	dom.sectionMain = document.querySelector('.section-main')
+	dom.mapWrapper = document.querySelector('.map-wrapper')
 	dom.planObject = document.querySelector('.plan-object')
 	dom.waySvg = document.querySelector('.svg-way')
 	dom.graphMarkers = document.querySelector('.graph-markers')
 	dom.mapSelect = document.getElementById('map-select')
+	dom.mapSelectLabel = document.querySelector('label[for="map-select"]')
+	dom.menu = document.querySelector('.menu')
 	dom.selector = document.querySelector('.selector')
 	dom.buttonFrom = document.querySelector('.button-from')
 	dom.buttonTo = document.querySelector('.button-to')
@@ -79,6 +108,12 @@ function cacheDom() {
 	dom.routeDetails = document.createElement('div')
 	dom.routeDetails.className = 'route-details'
 	dom.outputWay.after(dom.routeDetails)
+	if (dom.mapSelectLabel) dom.mapSelectLabel.textContent = 'Корпус'
+
+	dom.floorSwitcher = document.createElement('div')
+	dom.floorSwitcher.className = 'floor-switcher'
+	dom.floorSwitcher.hidden = true
+	dom.mapWrapper.appendChild(dom.floorSwitcher)
 }
 
 function hideLegacyGraphControls() {
@@ -99,7 +134,7 @@ function hideLegacyGraphControls() {
 
 function setupStaticHandlers() {
 	dom.planObject.addEventListener('load', onPlanObjectLoad)
-	dom.mapSelect.addEventListener('change', event => switchPlan(event.target.value))
+	dom.mapSelect.addEventListener('change', event => switchCorpus(event.target.value))
 	dom.buttonFrom.addEventListener('click', () => selectClickedRoomAs('from'))
 	dom.buttonTo.addEventListener('click', () => selectClickedRoomAs('to'))
 	dom.buildButton.addEventListener('click', event => {
@@ -202,15 +237,17 @@ function populateMapSelect() {
 	dom.mapSelect.replaceChildren()
 
 	for (const location of state.data.locations.filter(location => location.available !== false)) {
-		const plans = state.data.plans.filter(plan => plan.available !== false && plan.location?.id === location.id)
-		if (!plans.length) continue
+		const corpuses = state.data.corpuses
+			.filter(corpus => corpus.available !== false && corpus.location?.id === location.id)
+			.filter(corpus => getAvailablePlansForCorpus(corpus.id).length)
+		if (!corpuses.length) continue
 
 		const group = document.createElement('optgroup')
 		group.label = `${location.short} · ${location.title}`
-		for (const plan of plans) {
+		for (const corpus of corpuses) {
 			const option = document.createElement('option')
-			option.value = plan.id
-			option.textContent = getPlanLabel(plan, false)
+			option.value = corpus.id
+			option.textContent = getCorpusLabel(corpus)
 			group.appendChild(option)
 		}
 		dom.mapSelect.appendChild(group)
@@ -221,16 +258,46 @@ function populateRoomSuggestions() {
 	state.routeInputIndex.clear()
 }
 
+function switchCorpus(corpusId) {
+	const plan = getPreferredPlanForCorpus(corpusId)
+	if (plan) switchPlan(plan.id)
+}
+
 function switchPlan(planId) {
 	const plan = state.plansById.get(planId)
 	if (!plan) return
 
 	state.currentPlan = plan
-	dom.mapSelect.value = plan.id
+	dom.mapSelect.value = plan.corpusId
+	renderFloorSwitcher()
 	hideRoomSelector()
 	clearPlanRender()
 	setRouteStatus(`Загрузка карты: ${getPlanLabel(plan)}`)
 	dom.planObject.data = `${PLAN_BASE_URL}${plan.wayToSvg}`
+}
+
+function renderFloorSwitcher() {
+	dom.floorSwitcher.replaceChildren()
+
+	if (!state.currentPlan) {
+		dom.floorSwitcher.hidden = true
+		return
+	}
+
+	const plans = getAvailablePlansForCorpus(state.currentPlan.corpusId)
+	dom.floorSwitcher.hidden = !plans.length
+
+	for (const plan of plans) {
+		const button = document.createElement('button')
+		button.type = 'button'
+		button.className = 'floor-button'
+		button.classList.toggle('active-floor', plan.id === state.currentPlan.id)
+		button.textContent = getFloorButtonLabel(plan)
+		button.title = getPlanFullLabel(plan)
+		button.setAttribute('aria-label', getPlanFullLabel(plan))
+		button.addEventListener('click', () => switchPlan(plan.id))
+		dom.floorSwitcher.appendChild(button)
+	}
 }
 
 function onPlanObjectLoad() {
@@ -302,13 +369,26 @@ function selectClickedRoomAs(direction) {
 	const roomId = state.currentClickedRoomId
 	if (!roomId) return
 
+	setRouteRoom(roomId, direction, {switchToRoomPlan: false})
+}
+
+function setRouteRoom(roomId, direction, options = {}) {
 	if (direction === 'from') state.routeSelection.fromId = roomId
 	if (direction === 'to') state.routeSelection.toId = roomId
 
 	updateRouteInputsFromSelection()
 	hideRoomSelector()
-	state.planModel?.syncSelection()
+	const room = state.roomsById.get(roomId)
+	if (options.switchToRoomPlan !== false && room?.planId && room.planId !== state.currentPlan?.id) {
+		switchPlan(room.planId)
+	} else {
+		state.planModel?.syncSelection()
+	}
 	updateRouteControlsState()
+
+	if (options.source === 'schedule') {
+		dom.scheduleStatus.textContent = `${getRoomDisplayName(room)} выбрана как ${direction === 'from' ? 'точка отправления' : 'точка назначения'}`
+	}
 
 	buildRouteIfReady()
 }
@@ -364,6 +444,7 @@ function updateRouteControlsState() {
 	const hasTo = Boolean(state.routeSelection.toId)
 	dom.buildButton.classList.toggle('non-active-button', !(hasFrom && hasTo))
 	dom.eraseButton.classList.toggle('non-active-button', !(hasFrom || hasTo || state.currentRoute))
+	refreshScheduleRouteButtons()
 }
 
 function buildRouteIfReady() {
@@ -512,6 +593,55 @@ function setRouteStatus(text) {
 	if (dom.routeDetails) dom.routeDetails.replaceChildren()
 }
 
+function getAvailablePlansForCorpus(corpusId) {
+	return state.data.plans
+		.filter(plan => plan.available !== false && plan.corpusId === corpusId)
+		.sort(comparePlansByFloor)
+}
+
+function getPreferredPlanForCorpus(corpusId) {
+	const plans = getAvailablePlansForCorpus(corpusId)
+	if (!plans.length) return undefined
+	if (!state.currentPlan) return plans[0]
+
+	const currentFloorKey = getFloorKey(state.currentPlan)
+	return plans.find(plan => getFloorKey(plan) === currentFloorKey)
+		|| plans.find(plan => Number(plan.floor) === Number(state.currentPlan.floor))
+		|| plans[0]
+}
+
+function getFloorKey(plan) {
+	const planId = String(plan?.id || '').toLowerCase()
+	if (planId.includes('basement')) return 'basement'
+	if (planId.includes('cokol')) return 'cokol'
+	if (planId.includes('atresol')) return 'atresol'
+	return `floor:${plan?.floor}`
+}
+
+function getFloorButtonLabel(plan) {
+	const planId = String(plan.id).toLowerCase()
+	if (planId.includes('cokol')) return 'Ц'
+	if (planId.includes('basement')) return 'П'
+	if (planId.includes('atresol')) return 'А'
+	return String(plan.floor)
+}
+
+function comparePlansByFloor(planA, planB) {
+	const orderDifference = getFloorSortValue(planA) - getFloorSortValue(planB)
+	if (orderDifference) return orderDifference
+	return String(planA.id).localeCompare(String(planB.id), 'ru')
+}
+
+function getFloorSortValue(plan) {
+	const planId = String(plan.id).toLowerCase()
+	if (planId.includes('basement')) return -2
+	if (planId.includes('cokol')) return -1
+	if (planId.includes('atresol')) return Number(plan.floor) + 0.5
+
+	const numericFloor = Number(plan.floor)
+	return Number.isFinite(numericFloor) ? numericFloor : 1000
+}
+
 function getRoomDisplayName(room) {
 	if (!room) return ''
 	const numberOrTitle = cleanText(room.numberOrTitle)
@@ -544,8 +674,19 @@ function getPlanFullLabel(plan) {
 }
 
 function getCorpusLabel(corpus) {
+	if (!corpus) return ''
 	if (corpus.locationId === 'BS') return `Корпус ${corpus.title}`
-	return `Корпус ${corpus.id}`
+	return getReadableCorpusCode(corpus)
+}
+
+function getReadableCorpusCode(corpus) {
+	return String(corpus.id || '')
+		.replace(/_/g, '-')
+		.replace(/^(AV)(?=-|$)/, 'АВ')
+		.replace(/^(PR)(?=-|$)/, 'ПР')
+		.replace(/^(PK)(?=-|$)/, 'ПК')
+		.replace(/^(M)(?=-|$)/, 'М')
+		.replace(/SPORT/g, 'Спорткомплекс')
 }
 
 function getFloorLabel(plan) {
@@ -884,6 +1025,8 @@ function getPointerPoint(event) {
 }
 
 function activateMenuTab(tabName) {
+	dom.sectionMain?.classList.toggle('schedule-layout-active', tabName === 'schedule')
+	dom.menu?.classList.toggle('schedule-menu-active', tabName === 'schedule')
 	dom.menuTabs.forEach(tab => {
 		tab.classList.toggle('active-tab', tab.dataset.tab === tabName)
 	})
@@ -1083,4 +1226,489 @@ function stripHtml(html = '') {
 	const container = document.createElement('div')
 	container.innerHTML = html
 	return (container.textContent || container.innerText || '').trim()
+}
+
+function setupScheduleHandlers() {
+	createScheduleModeControls()
+	dom.groupScheduleButton.addEventListener('click', () => loadGroupSchedule())
+	dom.refreshGroupListButton.addEventListener('click', () => {
+		state.groupsLoaded = false
+		state.scheduleApiCache.clear()
+		loadAvailableGroups(true).catch(error => {
+			console.error(error)
+			showScheduleError('Не удалось обновить список групп')
+		})
+	})
+	dom.groupScheduleInput.addEventListener('focus', () => {
+		if (!state.groupsLoaded) {
+			loadAvailableGroups().catch(error => {
+				console.error(error)
+				showScheduleError('Не удалось загрузить список групп')
+			})
+		}
+	})
+	dom.groupScheduleInput.addEventListener('keydown', event => {
+		if (event.key === 'Enter') {
+			event.preventDefault()
+			loadGroupSchedule()
+		}
+	})
+}
+
+function createScheduleModeControls() {
+	const inputRow = dom.groupScheduleInput.closest('.input-row')
+	if (!inputRow) return
+
+	dom.scheduleModeButtons = document.createElement('div')
+	dom.scheduleModeButtons.className = 'schedule-mode'
+	for (const mode of [
+		{value: 'semester', label: 'Занятия'},
+		{value: 'session', label: 'Сессия'},
+	]) {
+		const button = document.createElement('button')
+		button.type = 'button'
+		button.className = 'schedule-mode-button'
+		button.dataset.mode = mode.value
+		button.textContent = mode.label
+		button.addEventListener('click', () => setScheduleMode(mode.value))
+		dom.scheduleModeButtons.appendChild(button)
+	}
+	inputRow.after(dom.scheduleModeButtons)
+	updateScheduleModeButtons()
+}
+
+function setScheduleMode(mode) {
+	if (state.scheduleMode === mode) return
+	state.scheduleMode = mode
+	state.groupsLoaded = false
+	state.availableGroups = []
+	state.scheduleGroupsMeta = null
+	updateScheduleModeButtons()
+	dom.scheduleOutput.replaceChildren()
+	loadAvailableGroups(true).catch(error => {
+		console.error(error)
+		showScheduleError('Не удалось загрузить список групп')
+	})
+}
+
+function updateScheduleModeButtons() {
+	dom.scheduleModeButtons?.querySelectorAll('.schedule-mode-button').forEach(button => {
+		button.classList.toggle('active-schedule-mode', button.dataset.mode === state.scheduleMode)
+	})
+}
+
+async function fetchScheduleApi(path, params = {}, options = {}) {
+	const url = new URL(`${SCHEDULE_API_BASE}/${path}`, window.location.href)
+	for (const [key, value] of Object.entries(params)) {
+		if (value !== undefined && value !== null) url.searchParams.set(key, value)
+	}
+	if (options.forceReload) url.searchParams.set('_', Date.now())
+
+	const response = await fetch(url, {
+		headers: {Accept: 'application/json'},
+		cache: options.forceReload ? 'no-store' : 'default',
+	})
+	const payload = await response.json().catch(() => null)
+	if (!response.ok) {
+		throw new Error(payload?.message || payload?.error || `Schedule API ${response.status}`)
+	}
+	return payload
+}
+
+async function loadAvailableGroups(forceReload = false) {
+	if (state.groupsLoaded && !forceReload) return state.availableGroups
+
+	dom.scheduleStatus.textContent = 'Загрузка актуального списка групп...'
+	const payload = await fetchScheduleApi('groups', {session: getScheduleSessionFlag()}, {forceReload})
+	state.availableGroups = (payload.groups || [])
+		.map(group => typeof group === 'string' ? {name: group, isDpo: false} : group)
+		.filter(group => group.name)
+		.sort((groupA, groupB) => groupA.name.localeCompare(groupB.name, 'ru', {numeric: true}))
+	state.scheduleGroupsMeta = payload.meta || null
+	renderGroupSuggestions()
+
+	state.groupsLoaded = true
+	const actualDate = state.scheduleGroupsMeta?.date ? ` · обновлено ${state.scheduleGroupsMeta.date}` : ''
+	dom.scheduleStatus.textContent = `Доступно групп: ${state.availableGroups.length}${actualDate}`
+	return state.availableGroups
+}
+
+function renderGroupSuggestions() {
+	dom.groupSuggestions.replaceChildren()
+	for (const group of state.availableGroups) {
+		const option = document.createElement('option')
+		option.value = group.name
+		option.label = group.isDpo ? `${group.name} · ДПО` : group.name
+		dom.groupSuggestions.appendChild(option)
+	}
+}
+
+async function loadGroupSchedule() {
+	const rawGroupName = dom.groupScheduleInput.value.trim()
+	if (!rawGroupName) {
+		dom.scheduleStatus.textContent = 'Введите номер группы'
+		dom.scheduleOutput.replaceChildren()
+		return
+	}
+
+	try {
+		await loadAvailableGroups()
+		const group = resolveSelectedGroup(rawGroupName)
+		if (!group) {
+			dom.scheduleStatus.textContent = 'Группа не найдена. Выберите вариант из актуальных подсказок'
+			dom.scheduleOutput.replaceChildren()
+			return
+		}
+
+		dom.groupScheduleInput.value = group.name
+		dom.scheduleStatus.textContent = 'Загрузка расписания...'
+		dom.scheduleOutput.replaceChildren()
+
+		const schedule = await fetchScheduleApi('group', {
+			group: group.name,
+			session: getScheduleSessionFlag(),
+		})
+		if (schedule.status === 'error') {
+			dom.scheduleStatus.textContent = schedule.message || 'Расписание для группы не найдено'
+			return
+		}
+
+		renderGroupSchedule(schedule)
+	} catch (error) {
+		console.error(error)
+		showScheduleError('Не удалось загрузить расписание')
+	}
+}
+
+function showScheduleError(message) {
+	dom.scheduleStatus.textContent = `${message}. Проверьте, что приложение запущено через node server.js`
+	dom.scheduleOutput.replaceChildren()
+}
+
+function getScheduleSessionFlag() {
+	return state.scheduleMode === 'session' ? 1 : 0
+}
+
+function resolveSelectedGroup(inputValue) {
+	const normalizedInput = normalizeGroupName(inputValue)
+	if (!normalizedInput) return null
+
+	const exactMatch = state.availableGroups.find(group => normalizeGroupName(group.name) === normalizedInput)
+	if (exactMatch) return exactMatch
+
+	const partialMatches = state.availableGroups.filter(group => normalizeGroupName(group.name).includes(normalizedInput))
+	return partialMatches.length === 1 ? partialMatches[0] : null
+}
+
+function renderGroupSchedule(schedule) {
+	dom.scheduleOutput.replaceChildren()
+	const group = schedule.group || {}
+	const grid = schedule.grid || {}
+	const isSessionGrid = Boolean(schedule.isSession) || getScheduleSessionFlag() === 1
+	const dayEntries = Object.entries(grid)
+		.sort((a, b) => sortScheduleDays(a[0], b[0], isSessionGrid))
+
+	for (const [dayKey, dayGrid] of dayEntries) {
+		const entries = collectScheduleEntries(dayGrid, group)
+		if (!entries.length) continue
+
+		const day = document.createElement('section')
+		day.className = 'schedule-day'
+
+		const title = document.createElement('h4')
+		title.textContent = getScheduleDayTitle(dayKey, isSessionGrid)
+		day.appendChild(title)
+
+		for (const entry of entries) {
+			day.appendChild(renderScheduleEntry(entry))
+		}
+
+		dom.scheduleOutput.appendChild(day)
+	}
+
+	const modeLabel = state.scheduleMode === 'session' ? 'сессия' : 'занятия'
+	dom.scheduleStatus.textContent = `${group.title || dom.groupScheduleInput.value} · ${modeLabel}`
+	if (!dom.scheduleOutput.childElementCount) {
+		dom.scheduleStatus.textContent += ' · занятий не найдено'
+	}
+}
+
+function collectScheduleEntries(dayGrid, group) {
+	const entries = []
+	for (let lessonNumber = 1; lessonNumber <= 7; lessonNumber++) {
+		for (const lesson of dayGrid?.[String(lessonNumber)] || []) {
+			entries.push(normalizeScheduleLesson(lesson, lessonNumber, group))
+		}
+	}
+	return entries
+}
+
+function normalizeScheduleLesson(lesson, lessonNumber, group) {
+	return {
+		lessonNumber,
+		time: LESSON_TIMES[group?.evening ? 1 : 0]?.[lessonNumber] || '',
+		subject: cleanScheduleText(lesson.sbj) || 'Без названия',
+		teacher: cleanScheduleText(lesson.teacher) || 'Преподаватель не указан',
+		type: cleanScheduleText(lesson.type),
+		dateRange: cleanScheduleText(lesson.dts),
+		auditories: normalizeAuditories(lesson),
+		link: cleanScheduleText(lesson.e_link),
+	}
+}
+
+function normalizeAuditories(lesson) {
+	const auditories = (lesson.auditories || [])
+		.map(auditory => stripHtml(auditory.title || ''))
+		.map(cleanScheduleText)
+		.filter(Boolean)
+	const fallbackAuditories = [
+		...(lesson.shortRooms || []),
+		lesson.location,
+	].map(cleanScheduleText).filter(Boolean)
+	const labels = auditories.length ? auditories : fallbackAuditories
+
+	return uniqueValues(labels).map(label => {
+		const room = resolveScheduleAuditory(label)
+		return {
+			label,
+			roomId: room?.id,
+			roomTitle: room ? getRoomDisplayName(room) : '',
+		}
+	})
+}
+
+function renderScheduleAuditories(auditories) {
+	const container = document.createElement('div')
+	container.className = 'schedule-auditories'
+
+	for (const auditory of auditories) {
+		container.appendChild(renderScheduleAuditory(auditory))
+	}
+
+	return container
+}
+
+function renderScheduleAuditory(auditory) {
+	if (!auditory.roomId) {
+		const text = document.createElement('span')
+		text.className = 'schedule-auditory-text'
+		text.textContent = auditory.label
+		return text
+	}
+
+	const chip = document.createElement('span')
+	chip.className = 'schedule-auditory-chip'
+
+	const roomButton = document.createElement('button')
+	roomButton.type = 'button'
+	roomButton.className = 'schedule-auditory-room'
+	roomButton.textContent = auditory.roomTitle || auditory.label
+	roomButton.title = 'Показать аудиторию на карте'
+	roomButton.addEventListener('click', () => showScheduleRoomOnMap(auditory.roomId))
+	chip.appendChild(roomButton)
+
+	chip.appendChild(createScheduleRouteAction(auditory.roomId, 'from', 'Отсюда'))
+	chip.appendChild(createScheduleRouteAction(auditory.roomId, 'to', 'Сюда'))
+
+	return chip
+}
+
+function createScheduleRouteAction(roomId, direction, label) {
+	const button = document.createElement('button')
+	button.type = 'button'
+	button.className = 'schedule-route-action'
+	button.dataset.roomId = roomId
+	button.dataset.direction = direction
+	button.textContent = label
+	button.addEventListener('click', () => setRouteRoom(roomId, direction, {source: 'schedule'}))
+	return button
+}
+
+function showScheduleRoomOnMap(roomId) {
+	const room = state.roomsById.get(roomId)
+	if (!room) return
+
+	state.currentClickedRoomId = roomId
+	if (room.planId && room.planId !== state.currentPlan?.id) {
+		switchPlan(room.planId)
+	} else {
+		state.planModel?.syncSelection(roomId)
+	}
+}
+
+function resolveScheduleAuditory(label) {
+	const roomIndex = getScheduleRoomIndex()
+	for (const candidate of getScheduleAuditoryCandidates(label)) {
+		const roomId = roomIndex.get(normalizeScheduleAuditoryKey(candidate))
+		if (roomId) return state.roomsById.get(roomId)
+	}
+	return null
+}
+
+function getScheduleRoomIndex() {
+	if (state.scheduleRoomIndex?.size) return state.scheduleRoomIndex
+
+	state.scheduleRoomIndex = new Map()
+	for (const room of state.availableRooms) {
+		addScheduleRoomIndexKey(room.id, room)
+		addScheduleRoomIndexKey(room.numberOrTitle, room)
+		addScheduleRoomIndexKey(getRoomDisplayName(room), room)
+	}
+	return state.scheduleRoomIndex
+}
+
+function addScheduleRoomIndexKey(value, room) {
+	const key = normalizeScheduleAuditoryKey(value)
+	if (!key || state.scheduleRoomIndex.has(key)) return
+	state.scheduleRoomIndex.set(key, room.id)
+}
+
+function getScheduleAuditoryCandidates(label) {
+	const text = cleanScheduleText(label).replace(/[№#]/g, ' ')
+	const candidates = [text]
+	const prefix = extractScheduleCorpusPrefix(text)
+	const numbers = [...text.matchAll(/\d+[a-zа-я]?/giu)].map(match => match[0])
+
+	if (prefix) {
+		for (const number of numbers) {
+			candidates.push(`${prefix}${number}`, `${prefix}-${number}`)
+		}
+	}
+
+	return uniqueValues(candidates)
+}
+
+function extractScheduleCorpusPrefix(label) {
+	const text = String(label || '').trim().toLowerCase()
+	const startMatch = text.match(/^-?\s*(ав|av|пр|pr|пк|pk|нд|nd|[абвнм]|a|b|v|n|m)(?=\s*[-\d]|\s+)/iu)
+	if (startMatch) return normalizeScheduleCorpusPrefix(startMatch[1])
+
+	const anywhereMatch = text.match(/(?:^|[^\p{L}\p{N}])(ав|av|пр|pr|пк|pk|нд|nd|[абвнм]|a|b|v|n|m)\s*-?\s*\d/iu)
+	return anywhereMatch ? normalizeScheduleCorpusPrefix(anywhereMatch[1]) : ''
+}
+
+function normalizeScheduleCorpusPrefix(prefix) {
+	const value = String(prefix || '').toLowerCase()
+	if (value === 'av') return 'ав'
+	if (value === 'pr') return 'пр'
+	if (value === 'pk') return 'пк'
+	if (value === 'nd') return 'нд'
+	if (value === 'a') return 'а'
+	if (value === 'b') return 'б'
+	if (value === 'v') return 'в'
+	if (value === 'n') return 'н'
+	if (value === 'm') return 'м'
+	return value
+}
+
+function normalizeScheduleAuditoryKey(value = '') {
+	let key = String(value || '')
+		.toLowerCase()
+		.replace(/ё/g, 'е')
+		.replace(/[–—−]/g, '-')
+		.replace(/[№#]/g, '')
+		.replace(/[^a-zа-я0-9]+/giu, '')
+
+	key = key
+		.replace(/^av(?=\d)/, 'ав')
+		.replace(/^pr(?=\d)/, 'пр')
+		.replace(/^pk(?=\d)/, 'пк')
+		.replace(/^nd(?=\d)/, 'нд')
+		.replace(/^a(?=\d)/, 'а')
+		.replace(/^b(?=\d)/, 'б')
+		.replace(/^v(?=\d)/, 'в')
+		.replace(/^n(?=\d)/, 'н')
+		.replace(/^m(?=\d)/, 'м')
+
+	return key
+}
+
+function refreshScheduleRouteButtons() {
+	document.querySelectorAll('.schedule-route-action').forEach(button => {
+		const selectedRoomId = button.dataset.direction === 'from'
+			? state.routeSelection.fromId
+			: state.routeSelection.toId
+		button.classList.toggle('active-schedule-route-action', button.dataset.roomId === selectedRoomId)
+	})
+}
+
+function renderScheduleEntry(entry) {
+	const item = document.createElement('article')
+	item.className = 'schedule-item'
+
+	const meta = document.createElement('div')
+	meta.className = 'schedule-item-meta'
+	meta.textContent = [
+		`${entry.lessonNumber} пара`,
+		entry.time,
+		entry.type,
+		entry.dateRange,
+	].filter(Boolean).join(' · ')
+	item.appendChild(meta)
+
+	const subject = document.createElement('div')
+	subject.className = 'schedule-item-subject'
+	subject.textContent = entry.subject
+	item.appendChild(subject)
+
+	const details = document.createElement('div')
+	details.className = 'schedule-item-details'
+	details.textContent = entry.teacher
+	item.appendChild(details)
+
+	if (entry.auditories.length) {
+		item.appendChild(renderScheduleAuditories(entry.auditories))
+	}
+
+	if (entry.link) {
+		const link = document.createElement('a')
+		link.className = 'schedule-item-link'
+		link.href = entry.link
+		link.target = '_blank'
+		link.rel = 'noopener noreferrer'
+		link.textContent = 'Материалы'
+		item.appendChild(link)
+	}
+
+	return item
+}
+
+function getScheduleDayTitle(dayKey, isSessionGrid) {
+	if (!isSessionGrid) return SCHEDULE_DAY_LABELS[Number(dayKey) - 1] || dayKey
+
+	const date = new Date(`${dayKey}T00:00:00`)
+	if (Number.isNaN(date.getTime())) return dayKey
+	const weekday = SCHEDULE_DAY_LABELS[(date.getDay() + 6) % 7]
+	return `${weekday} · ${formatScheduleDate(date)}`
+}
+
+function sortScheduleDays(dayA, dayB, isSessionGrid) {
+	if (isSessionGrid) return dayA.localeCompare(dayB)
+	return Number(dayA) - Number(dayB)
+}
+
+function formatScheduleDate(date) {
+	return new Intl.DateTimeFormat('ru-RU', {
+		day: '2-digit',
+		month: 'long',
+		year: 'numeric',
+	}).format(date)
+}
+
+function normalizeGroupName(value = '') {
+	return value.trim().toLowerCase().replace(/\s+/g, '').replace(/[–—−]/g, '-')
+}
+
+function cleanScheduleText(value = '') {
+	return String(value || '').replace(/\s+/g, ' ').trim()
+}
+
+function stripHtml(html = '') {
+	const container = document.createElement('div')
+	container.innerHTML = html
+	return cleanScheduleText(container.textContent || container.innerText || '')
+}
+
+function uniqueValues(values) {
+	return [...new Set(values)]
 }
