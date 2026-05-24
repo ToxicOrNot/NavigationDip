@@ -141,6 +141,60 @@ body {
 	color: #FFFFFF;
 }
 
+.route-pager {
+	position: absolute;
+	left: 50%;
+	bottom: 18px;
+	z-index: 18;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	transform: translateX(-50%);
+	padding: 6px;
+	border: 1px solid #575764;
+	border-radius: 999px;
+	background: rgba(19, 19, 22, 0.9);
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+	pointer-events: auto;
+}
+
+.route-pager[hidden] {
+	display: none;
+}
+
+.route-pager-button {
+	display: grid;
+	width: 42px;
+	height: 42px;
+	place-items: center;
+	border: 1px solid #575764;
+	border-radius: 50%;
+	background: #232323;
+	color: #FFFFFF;
+	cursor: pointer;
+	font-size: 24px;
+	line-height: 1;
+}
+
+.route-pager-button:hover:not(:disabled) {
+	border-color: #3CD288;
+	background: rgba(60, 210, 136, 0.16);
+}
+
+.route-pager-button:disabled {
+	cursor: default;
+	opacity: 0.35;
+}
+
+.route-pager-status {
+	min-width: 58px;
+	color: #FFFFFF;
+	font-size: 14px;
+	font-weight: 700;
+	text-align: center;
+	white-space: nowrap;
+}
+
 .map-objects {
 	position: relative;
 	width: 100%;
@@ -181,7 +235,7 @@ body {
 
 .menu-tabs {
 	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 8px;
 	width: 100%;
 }
@@ -439,6 +493,28 @@ input {
 .active-schedule-mode {
 	border-color: #3CD288;
 	background: rgba(60, 210, 136, 0.12);
+}
+
+.schedule-date-control {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: 1px solid #34343d;
+	border-radius: 8px;
+	padding: 8px 10px;
+	color: #9ea4b7;
+	font-size: 14px;
+}
+
+.schedule-date-control input {
+	min-width: 0;
+	border: 1px solid #575764;
+	border-radius: 8px;
+	background: #232323;
+	color: #FFFFFF;
+	padding: 7px 9px;
+	color-scheme: dark;
 }
 
 .refresh-group-list {
@@ -858,6 +934,23 @@ input {
 		width: 36px;
 		height: 36px;
 		font-size: 14px;
+	}
+
+	.route-pager {
+		bottom: 12px;
+		gap: 6px;
+		padding: 5px;
+	}
+
+	.route-pager-button {
+		width: 38px;
+		height: 38px;
+		font-size: 22px;
+	}
+
+	.route-pager-status {
+		min-width: 52px;
+		font-size: 13px;
 	}
 
 	.scale-buttons {

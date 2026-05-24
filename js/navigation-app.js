@@ -9,6 +9,8 @@ const STAIR_UP_WEIGHT = 1085
 const STAIR_DOWN_WEIGHT = 916
 const ROUTEABLE_VERTEX_TYPES = new Set(['hallway', 'lift', 'stair', 'corpusTransition', 'crossingSpace'])
 const SCHEDULE_API_BASE = './api/schedule'
+const FAVORITE_GROUPS_STORAGE_KEY = 'navigation.favoriteScheduleGroups'
+const USER_GROUP_STORAGE_KEY = 'navigation.userGroup'
 const LESSON_TIMES = {
 	0: {
 		1: '09:00-10:30',
@@ -30,6 +32,43 @@ const LESSON_TIMES = {
 	},
 }
 const SCHEDULE_DAY_LABELS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+const RUSSIAN_MONTH_INDEX = {
+	янв: 0,
+	январь: 0,
+	января: 0,
+	фев: 1,
+	февраль: 1,
+	февраля: 1,
+	мар: 2,
+	март: 2,
+	марта: 2,
+	апр: 3,
+	апрель: 3,
+	апреля: 3,
+	май: 4,
+	мая: 4,
+	июн: 5,
+	июнь: 5,
+	июня: 5,
+	июл: 6,
+	июль: 6,
+	июля: 6,
+	авг: 7,
+	август: 7,
+	августа: 7,
+	сен: 8,
+	сентябрь: 8,
+	сентября: 8,
+	окт: 9,
+	октябрь: 9,
+	октября: 9,
+	ноя: 10,
+	ноябрь: 10,
+	ноября: 10,
+	дек: 11,
+	декабрь: 11,
+	декабря: 11,
+}
 
 const dom = {}
 const state = {
@@ -45,6 +84,7 @@ const state = {
 	planModel: null,
 	currentClickedRoomId: null,
 	currentRoute: null,
+	currentRouteStepIndex: 0,
 	routeSelection: {
 		fromId: undefined,
 		toId: undefined,
@@ -55,12 +95,19 @@ const state = {
 	scheduleMode: 'semester',
 	scheduleGroupsMeta: null,
 	scheduleRoomIndex: new Map(),
+	currentSchedule: null,
+	scheduleViewDate: formatDateKey(new Date()),
+	favoriteGroups: {},
+	userGroup: '',
+	chatPendingIntent: null,
 }
 
 document.addEventListener('DOMContentLoaded', init)
 
 async function init() {
 	cacheDom()
+	loadFavoriteGroups()
+	loadUserGroup()
 	hideLegacyGraphControls()
 	setupStaticHandlers()
 	setupScheduleHandlers()
@@ -75,6 +122,10 @@ async function init() {
 		setupRouteInputs()
 		switchPlan(state.plansById.has('A-2') ? 'A-2' : state.data.plans.find(plan => plan.available)?.id)
 		setRouteStatus('Выберите аудитории на карте или через поля поиска')
+		showFavoriteScheduleOnStartup().catch(error => {
+			console.error(error)
+			showScheduleError('Не удалось автоматически загрузить расписание')
+		})
 	} catch (error) {
 		console.error(error)
 		setRouteStatus('Не удалось загрузить данные навигации')
@@ -118,6 +169,32 @@ function cacheDom() {
 	dom.floorSwitcher.className = 'floor-switcher'
 	dom.floorSwitcher.hidden = true
 	dom.mapWrapper.appendChild(dom.floorSwitcher)
+
+	dom.routePager = document.createElement('div')
+	dom.routePager.className = 'route-pager'
+	dom.routePager.hidden = true
+
+	dom.routePagerPrev = document.createElement('button')
+	dom.routePagerPrev.type = 'button'
+	dom.routePagerPrev.className = 'route-pager-button route-pager-prev'
+	dom.routePagerPrev.textContent = '←'
+	dom.routePagerPrev.setAttribute('aria-label', 'Предыдущий участок маршрута')
+	dom.routePagerPrev.addEventListener('click', () => showRouteStep(state.currentRouteStepIndex - 1))
+	dom.routePager.appendChild(dom.routePagerPrev)
+
+	dom.routePagerStatus = document.createElement('div')
+	dom.routePagerStatus.className = 'route-pager-status'
+	dom.routePager.appendChild(dom.routePagerStatus)
+
+	dom.routePagerNext = document.createElement('button')
+	dom.routePagerNext.type = 'button'
+	dom.routePagerNext.className = 'route-pager-button route-pager-next'
+	dom.routePagerNext.textContent = '→'
+	dom.routePagerNext.setAttribute('aria-label', 'Следующий участок маршрута')
+	dom.routePagerNext.addEventListener('click', () => showRouteStep(state.currentRouteStepIndex + 1))
+	dom.routePager.appendChild(dom.routePagerNext)
+
+	dom.mapWrapper.appendChild(dom.routePager)
 }
 
 function hideLegacyGraphControls() {
@@ -176,16 +253,28 @@ function setupChatHandlers() {
 	})
 }
 
-function sendChatMessage() {
+async function sendChatMessage() {
 	const text = dom.chatInput.value.trim()
 	if (!text) return
 
 	appendChatMessage('user', text)
 	dom.chatInput.value = ''
+	dom.chatInput.disabled = true
+	if (dom.chatForm) dom.chatForm.classList.add('chat-form-loading')
 
-	window.setTimeout(() => {
-		appendChatMessage('bot', getPlaceholderBotAnswer(text))
-	}, 250)
+	try {
+		const response = await handleChatMessage(text)
+		for (const message of Array.isArray(response) ? response : [response]) {
+			if (message) appendChatMessage('bot', message)
+		}
+	} catch (error) {
+		console.error(error)
+		appendChatMessage('bot', 'Не удалось обработать запрос. Проверьте, что локальный сервер запущен через node server.js.')
+	} finally {
+		dom.chatInput.disabled = false
+		if (dom.chatForm) dom.chatForm.classList.remove('chat-form-loading')
+		dom.chatInput.focus()
+	}
 }
 
 function appendChatMessage(role, text) {
@@ -206,8 +295,620 @@ function appendChatMessage(role, text) {
 	dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight
 }
 
-function getPlaceholderBotAnswer(userText) {
-	return 'Следующая пара у группы 241-114 - Иностранный язык в кабинетах ПК-610, ПК-435, ПК413'
+async function handleChatMessage(userText) {
+	const pendingIntent = state.chatPendingIntent
+	if (pendingIntent?.type === 'schedule-group') {
+		const groupName = await resolveChatGroupName(extractChatGroupName(userText) || userText)
+		if (!groupName) {
+			return 'Не нашел такую группу. Напишите номер группы в формате 241-114.'
+		}
+
+		state.chatPendingIntent = null
+		setUserGroup(groupName)
+		return executeChatIntent({...pendingIntent.intent, groupName})
+	}
+
+	let explicitGroupName = ''
+	const explicitGroup = extractChatGroupName(userText)
+	if (explicitGroup) {
+		const groupName = await resolveChatGroupName(explicitGroup)
+		if (groupName) {
+			setUserGroup(groupName)
+			explicitGroupName = groupName
+		}
+	}
+
+	const intent = parseChatIntent(userText)
+	if (!intent) {
+		if (explicitGroupName) {
+			return `Запомнил группу ${explicitGroupName}. Теперь могу отвечать по ее расписанию.`
+		}
+		return [
+			'Я могу построить маршрут, найти аудиторию на карте и ответить по расписанию.',
+			'Примеры: «как пройти из В-202 в Н-304», «какая следующая пара», «сколько пар завтра», «где Н-202».',
+		]
+	}
+
+	if (intent.requiresGroup) {
+		return executeScheduleChatIntent(intent, userText)
+	}
+
+	return executeChatIntent(intent)
+}
+
+function parseChatIntent(userText) {
+	const text = normalizeChatText(userText)
+	const roomRefs = extractChatRoomRefs(userText)
+
+	if (roomRefs.length >= 2 && isRouteChatText(text)) {
+		return {
+			type: 'route',
+			fromToken: roomRefs[0],
+			toToken: roomRefs[1],
+		}
+	}
+
+	if (roomRefs.length === 1 && isRoomLocationChatText(text)) {
+		return {
+			type: 'room-location',
+			roomToken: roomRefs[0],
+		}
+	}
+
+	if (isNextLessonRouteChatText(text)) {
+		return {
+			type: 'next-lesson-route',
+			requiresGroup: true,
+		}
+	}
+
+	if (isNextLessonChatText(text)) {
+		return {
+			type: 'next-lesson',
+			requiresGroup: true,
+		}
+	}
+
+	if (isLessonListChatText(text)) {
+		return {
+			type: text.includes('сколько') ? 'lesson-count' : 'lesson-list',
+			dayRef: parseChatDayReference(text),
+			requiresGroup: true,
+		}
+	}
+
+	if (isSubjectTimeChatText(text)) {
+		const dayRef = parseChatDayReference(text)
+		return {
+			type: 'subject-time',
+			dayRef,
+			subjectQuery: extractSubjectQuery(userText, dayRef),
+			requiresGroup: true,
+		}
+	}
+
+	return null
+}
+
+function isRouteChatText(text) {
+	return /(^|\s)(из|от)\s/.test(text)
+		|| /\s(в|до|к)\s/.test(text)
+		|| /(маршрут|пройти|попасть|добраться|дойти|проведи|построи)/.test(text)
+}
+
+function isRoomLocationChatText(text) {
+	return /(где|найди|покажи|находится|карте|аудитори)/.test(text)
+}
+
+function isNextLessonRouteChatText(text) {
+	return /(где|куда|маршрут|пройти|попасть|добраться)/.test(text)
+		&& /(следующ|ближайш)/.test(text)
+		&& /(пара|занят|лекц|практик|семинар)/.test(text)
+}
+
+function isNextLessonChatText(text) {
+	return /(какая|что|когда|следующ|ближайш)/.test(text)
+		&& /(следующ|ближайш)/.test(text)
+		&& /(пара|занят|лекц|практик|семинар)/.test(text)
+}
+
+function isLessonListChatText(text) {
+	return /(сколько|какие|какая|расписание|пары|занятия)/.test(text)
+		&& /(пар|пары|занят|расписание)/.test(text)
+		&& (parseChatDayReference(text) || /(сегодня|завтра)/.test(text))
+}
+
+function isSubjectTimeChatText(text) {
+	return /(во сколько|когда)/.test(text)
+		&& !/(следующ|ближайш)/.test(text)
+}
+
+async function executeScheduleChatIntent(intent, userText) {
+	const explicitGroup = extractChatGroupName(userText)
+	let groupName = explicitGroup
+		? await resolveChatGroupName(explicitGroup)
+		: state.userGroup
+	if (groupName) {
+		groupName = await resolveChatGroupName(groupName)
+	}
+
+	if (!groupName) {
+		state.chatPendingIntent = {
+			type: 'schedule-group',
+			intent,
+		}
+		return 'Для какой группы смотреть расписание? Напишите номер группы, например 241-114.'
+	}
+
+	return executeChatIntent({...intent, groupName})
+}
+
+async function executeChatIntent(intent) {
+	switch (intent.type) {
+		case 'route':
+			return executeRouteChatIntent(intent)
+		case 'room-location':
+			return executeRoomLocationChatIntent(intent)
+		case 'next-lesson':
+			return executeNextLessonChatIntent(intent)
+		case 'next-lesson-route':
+			return executeNextLessonRouteChatIntent(intent)
+		case 'lesson-count':
+		case 'lesson-list':
+			return executeDayLessonsChatIntent(intent)
+		case 'subject-time':
+			return executeSubjectTimeChatIntent(intent)
+		default:
+			return 'Я не понял запрос. Попробуйте написать проще: «как пройти из В-202 в Н-304» или «какая следующая пара».'
+	}
+}
+
+function executeRouteChatIntent(intent) {
+	const fromRoom = resolveChatRoom(intent.fromToken)
+	const toRoom = resolveChatRoom(intent.toToken)
+
+	if (!fromRoom || !toRoom) {
+		return 'Не смог распознать одну из аудиторий. Напишите их как В-202, Н-304 или ПК-610.'
+	}
+
+	return buildChatRoute(fromRoom.id, toRoom.id)
+}
+
+function executeRoomLocationChatIntent(intent) {
+	const room = resolveChatRoom(intent.roomToken)
+	if (!room) return 'Не нашел такую аудиторию на карте. Попробуйте формат Н-202 или ПК-610.'
+
+	activateMenuTab('navigation')
+	showScheduleRoomOnMap(room.id)
+	const plan = state.plansById.get(room.planId)
+	return `${getRoomDisplayName(room)} показана на карте: ${getPlanFullLabel(plan)}.`
+}
+
+async function executeNextLessonChatIntent(intent) {
+	const schedule = await fetchChatSchedule(intent.groupName)
+	const slot = findNextScheduleSlot(schedule)
+	if (!slot) return `В ближайшие дни у группы ${intent.groupName} пар не найдено.`
+
+	const prefix = slot.startAt <= new Date() && slot.endAt > new Date()
+		? 'Сейчас идет'
+		: 'Следующая пара'
+	return `${prefix} у группы ${intent.groupName}: ${formatScheduleSlot(slot)}.`
+}
+
+async function executeNextLessonRouteChatIntent(intent) {
+	const schedule = await fetchChatSchedule(intent.groupName)
+	const {previousSlot, nextSlot} = findPreviousAndNextScheduleSlots(schedule)
+	if (!nextSlot) return `В ближайшие дни у группы ${intent.groupName} следующая пара не найдена.`
+
+	const nextRoom = getPrimaryRoomFromSlot(nextSlot)
+	if (!previousSlot) {
+		if (nextRoom) {
+			activateMenuTab('navigation')
+			showScheduleRoomOnMap(nextRoom.id)
+		}
+		return `Следующая пара у группы ${intent.groupName}: ${formatScheduleSlot(nextSlot)}. Предыдущую пару для маршрута я не нашел.`
+	}
+
+	const previousRoom = getPrimaryRoomFromSlot(previousSlot)
+	if (!previousRoom || !nextRoom) {
+		return `Следующая пара: ${formatScheduleSlot(nextSlot)}. Не удалось распознать аудиторию предыдущей или следующей пары для маршрута.`
+	}
+
+	buildChatRoute(previousRoom.id, nextRoom.id)
+	return `Построил маршрут от прошлой пары (${formatScheduleSlot(previousSlot)}) до следующей (${formatScheduleSlot(nextSlot)}).`
+}
+
+async function executeDayLessonsChatIntent(intent) {
+	const schedule = await fetchChatSchedule(intent.groupName)
+	const targetDate = getDateForChatDayReference(intent.dayRef)
+	const slots = getScheduleSlotsForDate(schedule, targetDate)
+	const dayLabel = formatChatDay(targetDate)
+
+	if (!slots.length) return `${capitalizeFirst(dayLabel)} у группы ${intent.groupName} пар нет.`
+
+	if (intent.type === 'lesson-count') {
+		return `${capitalizeFirst(dayLabel)} у группы ${intent.groupName} ${slots.length} ${pluralizePairs(slots.length)}: ${slots.map(formatCompactScheduleSlot).join('; ')}.`
+	}
+
+	return `${capitalizeFirst(dayLabel)} у группы ${intent.groupName}: ${slots.map(formatCompactScheduleSlot).join('; ')}.`
+}
+
+async function executeSubjectTimeChatIntent(intent) {
+	if (!intent.subjectQuery) {
+		return 'Напишите название дисциплины, например: «Во сколько иностранный язык?»'
+	}
+
+	const schedule = await fetchChatSchedule(intent.groupName)
+	const targetDate = getDateForChatDayReference(intent.dayRef)
+	const slots = getScheduleSlotsForDate(schedule, targetDate)
+	const query = normalizeChatText(intent.subjectQuery)
+	const matches = slots.filter(slot => {
+		return slot.entries.some(entry => normalizeChatText(entry.subject).includes(query))
+	})
+	const dayLabel = formatChatDay(targetDate)
+
+	if (!matches.length) {
+		return `${capitalizeFirst(dayLabel)} у группы ${intent.groupName} я не нашел дисциплину «${intent.subjectQuery}».`
+	}
+
+	return `${capitalizeFirst(intent.subjectQuery)} ${dayLabel}: ${matches.map(formatCompactScheduleSlot).join('; ')}.`
+}
+
+function buildChatRoute(fromRoomId, toRoomId) {
+	state.routeSelection.fromId = fromRoomId
+	state.routeSelection.toId = toRoomId
+	updateRouteInputsFromSelection()
+	buildRouteBetweenSelectedRooms()
+	activateMenuTab('navigation')
+
+	const fromRoom = state.roomsById.get(fromRoomId)
+	const toRoom = state.roomsById.get(toRoomId)
+	if (!state.currentRoute) {
+		return `Не удалось построить маршрут из ${getRoomDisplayName(fromRoom)} в ${getRoomDisplayName(toRoom)}.`
+	}
+
+	return `Маршрут построен: ${getRoomDisplayName(fromRoom)} -> ${getRoomDisplayName(toRoom)}.`
+}
+
+async function fetchChatSchedule(groupName) {
+	const resolvedGroupName = await resolveChatGroupName(groupName)
+	if (!resolvedGroupName) throw new Error(`Unknown group: ${groupName}`)
+
+	const schedule = await fetchScheduleApi('group', {
+		group: resolvedGroupName,
+		session: getScheduleSessionFlag(),
+	})
+	if (schedule.status === 'error') {
+		throw new Error(schedule.message || 'Schedule not found')
+	}
+	return schedule
+}
+
+async function resolveChatGroupName(value) {
+	await loadAvailableGroups()
+	const group = resolveSelectedGroup(value)
+	return group?.name || null
+}
+
+function extractChatGroupName(text) {
+	const match = String(text || '').match(/\b(\d{3})\s*[-–—−]?\s*(\d{3})\b/u)
+	return match ? `${match[1]}-${match[2]}` : ''
+}
+
+function extractChatRoomRefs(text) {
+	const refs = []
+	const pattern = /(?:^|[^\p{L}\p{N}])((?:ав|пр|пк|нд|av|pr|pk|nd|[абвнмabvnm])\s*[-–—−]?\s*\d{2,4}[a-zа-я]?)(?=$|[^\p{L}\p{N}])/giu
+	for (const match of String(text || '').matchAll(pattern)) {
+		refs.push(cleanScheduleText(match[1]))
+	}
+	return uniqueValues(refs)
+}
+
+function resolveChatRoom(roomToken) {
+	for (const candidate of getChatRoomCandidates(roomToken)) {
+		const scheduleRoom = resolveScheduleAuditory(candidate)
+		if (scheduleRoom) return scheduleRoom
+
+		const roomId = resolveRoomInput(candidate)
+		if (roomId) return state.roomsById.get(roomId)
+	}
+	return null
+}
+
+function getChatRoomCandidates(roomToken) {
+	const token = cleanScheduleText(roomToken).replace(/[–—−]/g, '-')
+	const compact = token.replace(/\s+/g, '')
+	const spaced = token.replace(/\s*-\s*/g, '-')
+	const split = compact.match(/^([a-zа-я]+)-?(\d+[a-zа-я]?)$/iu)
+	const candidates = [token, compact, spaced]
+	if (split) {
+		candidates.push(`${split[1]}-${split[2]}`, `${split[1]} ${split[2]}`)
+	}
+	return uniqueValues(candidates)
+}
+
+function normalizeChatText(value = '') {
+	return String(value || '')
+		.toLowerCase()
+		.replace(/ё/g, 'е')
+		.replace(/[–—−]/g, '-')
+		.replace(/[^\p{L}\p{N}-]+/giu, ' ')
+		.replace(/\s+/g, ' ')
+		.trim()
+}
+
+function parseChatDayReference(text) {
+	const normalized = normalizeChatText(text)
+	if (hasChatPhrase(normalized, 'сегодня')) return {type: 'today'}
+	if (hasChatPhrase(normalized, 'завтра')) return {type: 'tomorrow'}
+
+	const weekdays = [
+		['понедельник', 'понедельника', 'пн'],
+		['вторник', 'вторника', 'вт'],
+		['среда', 'среду', 'ср'],
+		['четверг', 'четверга', 'чт'],
+		['пятница', 'пятницу', 'пт'],
+		['суббота', 'субботу', 'сб'],
+		['воскресенье', 'воскресение', 'вс'],
+	]
+	for (let index = 0; index < weekdays.length; index++) {
+		if (weekdays[index].some(alias => new RegExp(`(^|\\s)${alias}(\\s|$)`, 'u').test(normalized))) {
+			return {type: 'weekday', index}
+		}
+	}
+	return null
+}
+
+function getDateForChatDayReference(dayRef, baseDate = new Date()) {
+	const date = new Date(baseDate)
+	date.setHours(0, 0, 0, 0)
+
+	if (!dayRef || dayRef.type === 'today') return date
+	if (dayRef.type === 'tomorrow') {
+		date.setDate(date.getDate() + 1)
+		return date
+	}
+	if (dayRef.type === 'weekday') {
+		const currentIndex = getScheduleWeekdayIndex(date)
+		const offset = (dayRef.index - currentIndex + 7) % 7
+		date.setDate(date.getDate() + offset)
+		return date
+	}
+	return date
+}
+
+function extractSubjectQuery(userText, dayRef) {
+	let text = normalizeChatText(userText)
+	text = text.replace(/\b\d{3}\s*-?\s*\d{3}\b/u, ' ')
+	for (const phrase of [
+		'во сколько',
+		'когда',
+		'у меня',
+		'у группы',
+		'будет',
+		'начинается',
+		'пара',
+		'пары',
+		'занятие',
+		'занятия',
+		'предмет',
+		'дисциплина',
+		'сегодня',
+		'завтра',
+		'в',
+		'во',
+		'на',
+	]) {
+		text = removeChatPhrase(text, phrase)
+	}
+
+	if (dayRef?.type === 'weekday') {
+		for (const alias of getWeekdayAliases(dayRef.index)) {
+			text = text.replace(new RegExp(`(^|\\s)${alias}(\\s|$)`, 'gu'), ' ')
+		}
+	}
+
+	return text.replace(/\s+/g, ' ').trim()
+}
+
+function hasChatPhrase(text, phrase) {
+	return new RegExp(`(^|\\s)${escapeRegExp(phrase)}(?=\\s|$)`, 'u').test(text)
+}
+
+function removeChatPhrase(text, phrase) {
+	return text.replace(new RegExp(`(^|\\s)${escapeRegExp(phrase)}(?=\\s|$)`, 'gu'), ' ')
+}
+
+function escapeRegExp(value) {
+	return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getWeekdayAliases(index) {
+	return [
+		['понедельник', 'понедельника', 'пн'],
+		['вторник', 'вторника', 'вт'],
+		['среда', 'среду', 'ср'],
+		['четверг', 'четверга', 'чт'],
+		['пятница', 'пятницу', 'пт'],
+		['суббота', 'субботу', 'сб'],
+		['воскресенье', 'воскресение', 'вс'],
+	][index] || []
+}
+
+function findNextScheduleSlot(schedule, baseDate = new Date()) {
+	for (let dayOffset = 0; dayOffset <= 14; dayOffset++) {
+		const date = new Date(baseDate)
+		date.setDate(date.getDate() + dayOffset)
+		const slots = getScheduleSlotsForDate(schedule, date)
+		for (const slot of slots) {
+			if (slot.endAt > baseDate) return slot
+		}
+	}
+	return null
+}
+
+function findPreviousAndNextScheduleSlots(schedule, baseDate = new Date()) {
+	const slots = []
+	for (let dayOffset = -14; dayOffset <= 14; dayOffset++) {
+		const date = new Date(baseDate)
+		date.setDate(date.getDate() + dayOffset)
+		slots.push(...getScheduleSlotsForDate(schedule, date))
+	}
+
+	const previousSlot = slots.filter(slot => slot.startAt <= baseDate).at(-1) || null
+	const nextSlot = slots.find(slot => slot.startAt > baseDate) || null
+	return {previousSlot, nextSlot}
+}
+
+function getScheduleSlotsForDate(schedule, date) {
+	const group = schedule.group || {}
+	const grid = schedule.grid || {}
+	const isSessionGrid = Boolean(schedule.isSession) || getScheduleSessionFlag() === 1
+	const dayKey = isSessionGrid ? formatDateKey(date) : String(getScheduleWeekdayIndex(date) + 1)
+	const entries = collectScheduleEntries(grid?.[dayKey], group)
+		.filter(entry => isScheduleEntryActiveOnDate(entry, date))
+	const slotsByLesson = new Map()
+
+	for (const entry of entries) {
+		const timeRange = parseLessonTimeRange(entry.time)
+		if (!timeRange) continue
+
+		const key = `${entry.lessonNumber}|${entry.time}`
+		if (!slotsByLesson.has(key)) {
+			slotsByLesson.set(key, {
+				date: normalizeDateOnly(date),
+				lessonNumber: entry.lessonNumber,
+				time: entry.time,
+				startAt: createDateWithMinutes(date, timeRange.start),
+				endAt: createDateWithMinutes(date, timeRange.end),
+				entries: [],
+			})
+		}
+		slotsByLesson.get(key).entries.push(entry)
+	}
+
+	return [...slotsByLesson.values()].sort((slotA, slotB) => slotA.startAt - slotB.startAt)
+}
+
+function isScheduleEntryActiveOnDate(entry, date) {
+	const range = parseScheduleDateRange(entry.dateRange, date)
+	if (!range) return true
+	const day = normalizeDateOnly(date).getTime()
+	return day >= range.start.getTime() && day <= range.end.getTime()
+}
+
+function parseScheduleDateRange(dateRange, referenceDate) {
+	const text = normalizeChatText(dateRange)
+	if (!text) return null
+
+	const matches = [...text.matchAll(/(\d{1,2})(?:\s+|\.)([а-я]+|\d{1,2})(?:\s+|\.|-)?(\d{4})?/giu)]
+	if (matches.length < 2) return null
+
+	const start = parseScheduleDateMatch(matches[0], referenceDate)
+	const end = parseScheduleDateMatch(matches[1], referenceDate)
+	if (!start || !end) return null
+	if (end < start) end.setFullYear(end.getFullYear() + 1)
+
+	return {start, end}
+}
+
+function parseScheduleDateMatch(match, referenceDate) {
+	const day = Number(match[1])
+	const monthValue = match[2]
+	const month = /^\d+$/.test(monthValue)
+		? Number(monthValue) - 1
+		: RUSSIAN_MONTH_INDEX[monthValue.slice(0, 3)] ?? RUSSIAN_MONTH_INDEX[monthValue]
+	const year = Number(match[3]) || referenceDate.getFullYear()
+
+	if (!Number.isFinite(day) || !Number.isFinite(month) || month < 0 || month > 11) return null
+	return normalizeDateOnly(new Date(year, month, day))
+}
+
+function parseLessonTimeRange(time) {
+	const match = String(time || '').match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/)
+	if (!match) return null
+
+	return {
+		start: Number(match[1]) * 60 + Number(match[2]),
+		end: Number(match[3]) * 60 + Number(match[4]),
+	}
+}
+
+function createDateWithMinutes(date, minutes) {
+	const result = normalizeDateOnly(date)
+	result.setMinutes(minutes)
+	return result
+}
+
+function normalizeDateOnly(date) {
+	const result = new Date(date)
+	result.setHours(0, 0, 0, 0)
+	return result
+}
+
+function getScheduleWeekdayIndex(date) {
+	return (date.getDay() + 6) % 7
+}
+
+function formatDateKey(date) {
+	const year = date.getFullYear()
+	const month = String(date.getMonth() + 1).padStart(2, '0')
+	const day = String(date.getDate()).padStart(2, '0')
+	return `${year}-${month}-${day}`
+}
+
+function getPrimaryRoomFromSlot(slot) {
+	for (const entry of slot?.entries || []) {
+		for (const auditory of entry.auditories || []) {
+			if (auditory.roomId) return state.roomsById.get(auditory.roomId)
+		}
+	}
+	return null
+}
+
+function formatScheduleSlot(slot) {
+	const subjects = uniqueValues(slot.entries.map(entry => entry.subject)).join(', ')
+	const rooms = getSlotRoomLabels(slot)
+	const roomText = rooms.length
+		? `, ${rooms.length === 1 ? 'кабинет' : 'кабинеты'} ${rooms.join(', ')}`
+		: ''
+	return `${formatChatDay(slot.date)}, ${slot.lessonNumber} пара (${slot.time}) - ${subjects}${roomText}`
+}
+
+function formatCompactScheduleSlot(slot) {
+	const subjects = uniqueValues(slot.entries.map(entry => entry.subject)).join(', ')
+	return `${slot.lessonNumber} пара ${slot.time} - ${subjects}`
+}
+
+function getSlotRoomLabels(slot) {
+	const labels = []
+	for (const entry of slot.entries || []) {
+		for (const auditory of entry.auditories || []) {
+			labels.push(auditory.roomTitle || auditory.label)
+		}
+	}
+	return uniqueValues(labels.filter(Boolean))
+}
+
+function formatChatDay(date, baseDate = new Date()) {
+	const target = normalizeDateOnly(date).getTime()
+	const today = normalizeDateOnly(baseDate).getTime()
+	const tomorrow = today + 24 * 60 * 60 * 1000
+	if (target === today) return 'сегодня'
+	if (target === tomorrow) return 'завтра'
+	return SCHEDULE_DAY_LABELS[getScheduleWeekdayIndex(date)].toLowerCase()
+}
+
+function pluralizePairs(count) {
+	const mod10 = count % 10
+	const mod100 = count % 100
+	if (mod10 === 1 && mod100 !== 11) return 'пара'
+	if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'пары'
+	return 'пар'
+}
+
+function capitalizeFirst(value = '') {
+	return value ? value[0].toUpperCase() + value.slice(1) : ''
 }
 
 function setupRouteInputs() {
@@ -452,7 +1153,9 @@ function applyRouteInput(input) {
 	if (!input.value.trim()) {
 		state.routeSelection[direction] = undefined
 		state.currentRoute = null
+		state.currentRouteStepIndex = 0
 		clearRouteDrawing()
+		updateRoutePager()
 		state.planModel?.syncSelection()
 		updateRouteControlsState()
 		return false
@@ -515,22 +1218,31 @@ function buildRouteBetweenSelectedRooms() {
 	const toId = state.routeSelection.toId
 
 	if (!fromId || !toId) {
+		state.currentRoute = null
+		state.currentRouteStepIndex = 0
 		setRouteStatus('Выберите две аудитории')
 		clearRouteDrawing()
+		updateRoutePager()
 		updateRouteControlsState()
 		return
 	}
 	if (fromId === toId) {
+		state.currentRoute = null
+		state.currentRouteStepIndex = 0
 		setRouteStatus('Выбрана одна и та же аудитория')
 		clearRouteDrawing()
+		updateRoutePager()
 		updateRouteControlsState()
 		return
 	}
 
 	const result = state.graph.getShortestWayFromTo(fromId, toId)
 	if (!result.way.length || !Number.isFinite(result.distance)) {
+		state.currentRoute = null
+		state.currentRouteStepIndex = 0
 		setRouteStatus('Маршрут не найден')
 		clearRouteDrawing()
+		updateRoutePager()
 		updateRouteControlsState()
 		return
 	}
@@ -542,14 +1254,10 @@ function buildRouteBetweenSelectedRooms() {
 		way: result.way,
 		steps: buildRouteSteps(result.way),
 	}
+	state.currentRouteStepIndex = 0
 
 	renderRouteSummary()
-	const currentPlanHasRoute = state.currentRoute.steps.some(step => step.plan.id === state.currentPlan?.id)
-	if (!currentPlanHasRoute && state.currentRoute.steps[0]) {
-		switchPlan(state.currentRoute.steps[0].plan.id)
-	} else {
-		drawCurrentRouteSegments()
-	}
+	showRouteStep(0)
 	updateRouteControlsState()
 }
 
@@ -574,7 +1282,16 @@ function buildRouteSteps(way) {
 		currentStep.way.push(vertex)
 	}
 
-	return steps.filter(step => step.way.length > 0)
+	const visibleSteps = steps.filter((step, index) => shouldShowRouteStep(step, index, steps))
+	return visibleSteps.length ? visibleSteps : steps.filter(step => step.way.length > 0)
+}
+
+function shouldShowRouteStep(step, index, steps) {
+	if (!step?.way?.length) return false
+	if (index === 0 || index === steps.length - 1) return true
+	if (step.way.length < 2) return false
+
+	return getPolylineDistance(step.way) > 1
 }
 
 function renderRouteSummary() {
@@ -587,18 +1304,25 @@ function renderRouteSummary() {
 		const button = document.createElement('button')
 		button.type = 'button'
 		button.className = 'route-step'
-		button.classList.toggle('active-route-step', step.plan.id === state.currentPlan?.id)
+		button.classList.toggle('active-route-step', index === state.currentRouteStepIndex)
 		button.textContent = `${index + 1}. ${getPlanFullLabel(step.plan)} · ${Math.floor(step.distance)}`
-		button.addEventListener('click', () => switchPlan(step.plan.id))
+		button.addEventListener('click', () => showRouteStep(index))
 		dom.routeDetails.appendChild(button)
 	})
+
+	updateRoutePager()
 }
 
 function drawCurrentRouteSegments() {
 	clearRouteDrawing()
 	if (!state.currentRoute || !state.currentPlan) return
 
-	const steps = state.currentRoute.steps.filter(step => step.plan.id === state.currentPlan.id)
+	syncRouteStepIndexWithCurrentPlan()
+
+	const activeStep = state.currentRoute.steps[state.currentRouteStepIndex]
+	const steps = activeStep?.plan.id === state.currentPlan.id
+		? [activeStep]
+		: state.currentRoute.steps.filter(step => step.plan.id === state.currentPlan.id)
 	for (const step of steps) {
 		if (step.way.length < 2) continue
 
@@ -621,6 +1345,54 @@ function drawCurrentRouteSegments() {
 	if (state.currentRoute) renderRouteSummary()
 }
 
+function showRouteStep(index) {
+	if (!state.currentRoute?.steps.length) {
+		updateRoutePager()
+		return
+	}
+
+	const nextIndex = Math.max(0, Math.min(index, state.currentRoute.steps.length - 1))
+	state.currentRouteStepIndex = nextIndex
+	const step = state.currentRoute.steps[nextIndex]
+	if (!step) return
+
+	if (step.plan.id !== state.currentPlan?.id) {
+		switchPlan(step.plan.id)
+	} else {
+		drawCurrentRouteSegments()
+	}
+	renderRouteSummary()
+	updateRoutePager()
+}
+
+function syncRouteStepIndexWithCurrentPlan() {
+	if (!state.currentRoute || !state.currentPlan) return
+
+	const activeStep = state.currentRoute.steps[state.currentRouteStepIndex]
+	if (activeStep?.plan.id === state.currentPlan.id) return
+
+	const matchingIndex = state.currentRoute.steps.findIndex(step => step.plan.id === state.currentPlan.id)
+	if (matchingIndex >= 0) state.currentRouteStepIndex = matchingIndex
+}
+
+function updateRoutePager() {
+	if (!dom.routePager) return
+
+	const steps = state.currentRoute?.steps || []
+	const shouldShow = steps.length > 1
+	dom.routePager.hidden = !shouldShow
+	if (!shouldShow) return
+
+	const index = Math.max(0, Math.min(state.currentRouteStepIndex, steps.length - 1))
+	state.currentRouteStepIndex = index
+	const step = steps[index]
+
+	dom.routePagerPrev.disabled = index === 0
+	dom.routePagerNext.disabled = index === steps.length - 1
+	dom.routePagerStatus.textContent = `${index + 1} / ${steps.length}`
+	dom.routePagerStatus.title = getPlanFullLabel(step.plan)
+}
+
 function verticesToPathD(vertices) {
 	return vertices.map((vertex, index) => `${index === 0 ? 'M' : 'L'}${vertex.x} ${vertex.y}`).join('')
 }
@@ -631,6 +1403,7 @@ function clearRouteDrawing() {
 
 function clearRoute() {
 	state.currentRoute = null
+	state.currentRouteStepIndex = 0
 	state.routeSelection.fromId = undefined
 	state.routeSelection.toId = undefined
 	state.currentClickedRoomId = null
@@ -638,6 +1411,7 @@ function clearRoute() {
 	setRouteStatus('Выберите аудитории на карте или через поля поиска')
 	dom.routeDetails.replaceChildren()
 	clearRouteDrawing()
+	updateRoutePager()
 	state.planModel?.syncSelection()
 	updateRouteControlsState()
 }
@@ -645,6 +1419,7 @@ function clearRoute() {
 function setRouteStatus(text) {
 	dom.outputWay.textContent = text
 	if (dom.routeDetails) dom.routeDetails.replaceChildren()
+	if (!state.currentRoute) updateRoutePager()
 }
 
 function getAvailablePlansForCorpus(corpusId) {
@@ -1166,6 +1941,7 @@ async function loadAvailableGroups(forceReload = false) {
 async function loadGroupSchedule() {
 	const rawGroupName = dom.groupScheduleInput.value.trim()
 	if (!rawGroupName) {
+		state.currentSchedule = null
 		dom.scheduleStatus.textContent = 'Введите номер группы'
 		dom.scheduleOutput.replaceChildren()
 		return
@@ -1330,7 +2106,26 @@ function createScheduleModeControls() {
 		dom.scheduleModeButtons.appendChild(button)
 	}
 	inputRow.after(dom.scheduleModeButtons)
+	createScheduleDateControl(dom.scheduleModeButtons)
 	updateScheduleModeButtons()
+}
+
+function createScheduleDateControl(anchorElement) {
+	dom.scheduleDateControl = document.createElement('label')
+	dom.scheduleDateControl.className = 'schedule-date-control'
+	dom.scheduleDateControl.textContent = 'Неделя'
+
+	dom.scheduleDateInput = document.createElement('input')
+	dom.scheduleDateInput.type = 'date'
+	dom.scheduleDateInput.value = state.scheduleViewDate
+	dom.scheduleDateInput.addEventListener('change', () => {
+		if (!dom.scheduleDateInput.value) return
+		state.scheduleViewDate = dom.scheduleDateInput.value
+		if (state.currentSchedule) renderGroupSchedule(state.currentSchedule)
+	})
+
+	dom.scheduleDateControl.appendChild(dom.scheduleDateInput)
+	anchorElement.after(dom.scheduleDateControl)
 }
 
 function setScheduleMode(mode) {
@@ -1339,6 +2134,7 @@ function setScheduleMode(mode) {
 	state.groupsLoaded = false
 	state.availableGroups = []
 	state.scheduleGroupsMeta = null
+	state.currentSchedule = null
 	updateScheduleModeButtons()
 	dom.scheduleOutput.replaceChildren()
 	loadAvailableGroups(true).catch(error => {
@@ -1379,9 +2175,10 @@ async function loadAvailableGroups(forceReload = false) {
 	state.availableGroups = (payload.groups || [])
 		.map(group => typeof group === 'string' ? {name: group, isDpo: false} : group)
 		.filter(group => group.name)
-		.sort((groupA, groupB) => groupA.name.localeCompare(groupB.name, 'ru', {numeric: true}))
+		.sort(compareScheduleGroups)
 	state.scheduleGroupsMeta = payload.meta || null
 	renderGroupSuggestions()
+	prefillFavoriteScheduleGroup()
 
 	state.groupsLoaded = true
 	const actualDate = state.scheduleGroupsMeta?.date ? ` · обновлено ${state.scheduleGroupsMeta.date}` : ''
@@ -1394,12 +2191,137 @@ function renderGroupSuggestions() {
 	for (const group of state.availableGroups) {
 		const option = document.createElement('option')
 		option.value = group.name
-		option.label = group.isDpo ? `${group.name} · ДПО` : group.name
+		const views = getFavoriteGroupCount(group.name)
+		const dpoLabel = group.isDpo ? ' · ДПО' : ''
+		const viewsLabel = views ? ` · часто используется: ${views}` : ''
+		option.label = `${group.name}${dpoLabel}${viewsLabel}`
 		dom.groupSuggestions.appendChild(option)
 	}
 }
 
-async function loadGroupSchedule() {
+function loadFavoriteGroups() {
+	try {
+		state.favoriteGroups = JSON.parse(localStorage.getItem(FAVORITE_GROUPS_STORAGE_KEY) || '{}')
+	} catch (error) {
+		state.favoriteGroups = {}
+	}
+}
+
+function loadUserGroup() {
+	try {
+		state.userGroup = localStorage.getItem(USER_GROUP_STORAGE_KEY) || getLastViewedScheduleGroup() || ''
+	} catch (error) {
+		state.userGroup = getLastViewedScheduleGroup() || ''
+	}
+}
+
+function setUserGroup(groupName) {
+	const normalizedGroup = normalizeGroupName(groupName)
+	if (!normalizedGroup) return
+
+	state.userGroup = groupName
+	try {
+		localStorage.setItem(USER_GROUP_STORAGE_KEY, groupName)
+	} catch (error) {
+		console.warn('Не удалось сохранить группу пользователя', error)
+	}
+}
+
+function rememberScheduleGroup(groupName) {
+	const normalizedGroup = normalizeGroupName(groupName)
+	if (!normalizedGroup) return
+
+	setUserGroup(groupName)
+	const current = state.favoriteGroups[normalizedGroup] || {
+		name: groupName,
+		count: 0,
+		lastUsedAt: 0,
+	}
+	state.favoriteGroups[normalizedGroup] = {
+		name: groupName,
+		count: Number(current.count || 0) + 1,
+		lastUsedAt: Date.now(),
+	}
+	saveFavoriteGroups()
+	state.availableGroups.sort(compareScheduleGroups)
+	renderGroupSuggestions()
+}
+
+function saveFavoriteGroups() {
+	try {
+		localStorage.setItem(FAVORITE_GROUPS_STORAGE_KEY, JSON.stringify(state.favoriteGroups))
+	} catch (error) {
+		console.warn('Не удалось сохранить часто используемую группу', error)
+	}
+}
+
+function getFavoriteGroup(groupName) {
+	return state.favoriteGroups[normalizeGroupName(groupName)]
+}
+
+function getFavoriteGroupCount(groupName) {
+	return Number(getFavoriteGroup(groupName)?.count || 0)
+}
+
+function getMostUsedScheduleGroup() {
+	return Object.values(state.favoriteGroups)
+		.filter(item => item?.name)
+		.sort((itemA, itemB) => {
+			const countDifference = Number(itemB.count || 0) - Number(itemA.count || 0)
+			if (countDifference) return countDifference
+			return Number(itemB.lastUsedAt || 0) - Number(itemA.lastUsedAt || 0)
+		})[0]?.name
+}
+
+function getLastViewedScheduleGroup() {
+	return Object.values(state.favoriteGroups)
+		.filter(item => item?.name)
+		.sort((itemA, itemB) => {
+			const lastUsedDifference = Number(itemB.lastUsedAt || 0) - Number(itemA.lastUsedAt || 0)
+			if (lastUsedDifference) return lastUsedDifference
+			return Number(itemB.count || 0) - Number(itemA.count || 0)
+		})[0]?.name
+}
+
+function prefillFavoriteScheduleGroup() {
+	if (dom.groupScheduleInput.value.trim()) return
+
+	const lastViewedGroup = getLastViewedScheduleGroup()
+	if (!lastViewedGroup) return
+
+	const exists = state.availableGroups.some(group => normalizeGroupName(group.name) === normalizeGroupName(lastViewedGroup))
+	if (exists) dom.groupScheduleInput.value = lastViewedGroup
+}
+
+function compareScheduleGroups(groupA, groupB) {
+	const favoriteA = getFavoriteGroup(groupA.name)
+	const favoriteB = getFavoriteGroup(groupB.name)
+	const countDifference = Number(favoriteB?.count || 0) - Number(favoriteA?.count || 0)
+	if (countDifference) return countDifference
+
+	const lastUsedDifference = Number(favoriteB?.lastUsedAt || 0) - Number(favoriteA?.lastUsedAt || 0)
+	if (lastUsedDifference) return lastUsedDifference
+
+	return groupA.name.localeCompare(groupB.name, 'ru', {numeric: true})
+}
+
+async function showFavoriteScheduleOnStartup() {
+	const lastViewedGroup = getLastViewedScheduleGroup()
+	if (!lastViewedGroup) return
+
+	dom.groupScheduleInput.value = lastViewedGroup
+	await loadAvailableGroups()
+
+	const group = resolveSelectedGroup(lastViewedGroup)
+	if (!group) return
+
+	dom.groupScheduleInput.value = group.name
+	activateMenuTab('schedule')
+	await loadGroupSchedule({rememberUsage: false})
+}
+
+async function loadGroupSchedule(options = {}) {
+	const shouldRememberUsage = options.rememberUsage !== false
 	const rawGroupName = dom.groupScheduleInput.value.trim()
 	if (!rawGroupName) {
 		dom.scheduleStatus.textContent = 'Введите номер группы'
@@ -1411,6 +2333,7 @@ async function loadGroupSchedule() {
 		await loadAvailableGroups()
 		const group = resolveSelectedGroup(rawGroupName)
 		if (!group) {
+			state.currentSchedule = null
 			dom.scheduleStatus.textContent = 'Группа не найдена. Выберите вариант из актуальных подсказок'
 			dom.scheduleOutput.replaceChildren()
 			return
@@ -1429,6 +2352,8 @@ async function loadGroupSchedule() {
 			return
 		}
 
+		state.currentSchedule = schedule
+		if (shouldRememberUsage) rememberScheduleGroup(group.name)
 		renderGroupSchedule(schedule)
 	} catch (error) {
 		console.error(error)
@@ -1437,6 +2362,7 @@ async function loadGroupSchedule() {
 }
 
 function showScheduleError(message) {
+	state.currentSchedule = null
 	dom.scheduleStatus.textContent = `${message}. Проверьте, что приложение запущено через node server.js`
 	dom.scheduleOutput.replaceChildren()
 }
@@ -1461,18 +2387,26 @@ function renderGroupSchedule(schedule) {
 	const group = schedule.group || {}
 	const grid = schedule.grid || {}
 	const isSessionGrid = Boolean(schedule.isSession) || getScheduleSessionFlag() === 1
+	const viewWeekStart = getScheduleViewWeekStart()
+	const viewWeekEnd = addDays(viewWeekStart, 6)
 	const dayEntries = Object.entries(grid)
+		.filter(([dayKey]) => shouldRenderScheduleDayInSelectedWeek(dayKey, isSessionGrid, viewWeekStart))
 		.sort((a, b) => sortScheduleDays(a[0], b[0], isSessionGrid))
 
 	for (const [dayKey, dayGrid] of dayEntries) {
-		const entries = collectScheduleEntries(dayGrid, group)
+		const dayDate = getScheduleDateForDayKey(dayKey, isSessionGrid, viewWeekStart)
+		const entries = filterScheduleEntriesForDisplay(
+			collectScheduleEntries(dayGrid, group),
+			isSessionGrid,
+			dayDate,
+		)
 		if (!entries.length) continue
 
 		const day = document.createElement('section')
 		day.className = 'schedule-day'
 
 		const title = document.createElement('h4')
-		title.textContent = getScheduleDayTitle(dayKey, isSessionGrid)
+		title.textContent = getScheduleDayTitle(dayKey, isSessionGrid, dayDate)
 		day.appendChild(title)
 
 		for (const entry of entries) {
@@ -1483,10 +2417,59 @@ function renderGroupSchedule(schedule) {
 	}
 
 	const modeLabel = state.scheduleMode === 'session' ? 'сессия' : 'занятия'
-	dom.scheduleStatus.textContent = `${group.title || dom.groupScheduleInput.value} · ${modeLabel}`
+	dom.scheduleStatus.textContent = `${group.title || dom.groupScheduleInput.value} · ${modeLabel} · неделя ${formatScheduleDate(viewWeekStart)} - ${formatScheduleDate(viewWeekEnd)}`
 	if (!dom.scheduleOutput.childElementCount) {
 		dom.scheduleStatus.textContent += ' · занятий не найдено'
 	}
+}
+
+function filterScheduleEntriesForDisplay(entries, isSessionGrid, date) {
+	if (isSessionGrid) return entries
+	return entries.filter(entry => isScheduleEntryActiveOnDate(entry, date))
+}
+
+function getScheduleViewWeekStart() {
+	const selectedDate = parseDateInputValue(state.scheduleViewDate) || new Date()
+	const weekStart = normalizeDateOnly(selectedDate)
+	weekStart.setDate(weekStart.getDate() - getScheduleWeekdayIndex(weekStart))
+	return weekStart
+}
+
+function shouldRenderScheduleDayInSelectedWeek(dayKey, isSessionGrid, weekStart) {
+	if (!isSessionGrid) return true
+
+	const date = parseScheduleDayKeyDate(dayKey)
+	if (!date) return false
+	const weekEnd = addDays(weekStart, 6)
+	return date >= weekStart && date <= weekEnd
+}
+
+function getScheduleDateForDayKey(dayKey, isSessionGrid, weekStart) {
+	if (isSessionGrid) return parseScheduleDayKeyDate(dayKey) || weekStart
+
+	const weekdayIndex = Number(dayKey) - 1
+	return addDays(weekStart, Number.isFinite(weekdayIndex) ? weekdayIndex : 0)
+}
+
+function parseDateInputValue(value) {
+	const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+	if (!match) return null
+
+	const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+	return Number.isNaN(date.getTime()) ? null : date
+}
+
+function parseScheduleDayKeyDate(dayKey) {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dayKey))) return null
+
+	const date = new Date(`${dayKey}T00:00:00`)
+	return Number.isNaN(date.getTime()) ? null : normalizeDateOnly(date)
+}
+
+function addDays(date, days) {
+	const result = normalizeDateOnly(date)
+	result.setDate(result.getDate() + days)
+	return result
 }
 
 function collectScheduleEntries(dayGrid, group) {
@@ -1729,13 +2712,16 @@ function renderScheduleEntry(entry) {
 	return item
 }
 
-function getScheduleDayTitle(dayKey, isSessionGrid) {
-	if (!isSessionGrid) return SCHEDULE_DAY_LABELS[Number(dayKey) - 1] || dayKey
+function getScheduleDayTitle(dayKey, isSessionGrid, date) {
+	if (!isSessionGrid) {
+		const dayLabel = SCHEDULE_DAY_LABELS[Number(dayKey) - 1] || dayKey
+		return date ? `${dayLabel} · ${formatScheduleDayDate(date)}` : dayLabel
+	}
 
-	const date = new Date(`${dayKey}T00:00:00`)
-	if (Number.isNaN(date.getTime())) return dayKey
-	const weekday = SCHEDULE_DAY_LABELS[(date.getDay() + 6) % 7]
-	return `${weekday} · ${formatScheduleDate(date)}`
+	const scheduleDate = date || parseScheduleDayKeyDate(dayKey)
+	if (!scheduleDate) return dayKey
+	const weekday = SCHEDULE_DAY_LABELS[(scheduleDate.getDay() + 6) % 7]
+	return `${weekday} · ${formatScheduleDate(scheduleDate)}`
 }
 
 function sortScheduleDays(dayA, dayB, isSessionGrid) {
@@ -1748,6 +2734,13 @@ function formatScheduleDate(date) {
 		day: '2-digit',
 		month: 'long',
 		year: 'numeric',
+	}).format(date)
+}
+
+function formatScheduleDayDate(date) {
+	return new Intl.DateTimeFormat('ru-RU', {
+		day: '2-digit',
+		month: 'long',
 	}).format(date)
 }
 
