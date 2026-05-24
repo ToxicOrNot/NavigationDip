@@ -60,6 +60,7 @@
 		<div class="menu-tabs">
 			<button class="menu-tab button active-tab" data-tab="navigation">Навигация</button>
 			<button class="menu-tab button" data-tab="schedule">Расписание</button>
+			<button class="menu-tab button" data-tab="chat">Чат</button>
 		</div>
 
 		<div class="menu-panel active-panel" data-panel="navigation">
@@ -110,6 +111,16 @@
 				<button class="refresh-group-list button">Обновить список групп</button>
 				<p class="schedule-status"></p>
 				<div class="schedule-output"></div>
+			</div>
+		</div>
+
+		<div class="menu-panel" data-panel="chat">
+			<div class="chat-panel">
+				<div class="chat-messages" aria-live="polite"></div>
+				<form class="chat-form">
+					<textarea class="chat-input" placeholder="Спросите про аудиторию, расписание или маршрут" rows="2"></textarea>
+					<button class="chat-send button" type="submit">Отправить</button>
+				</form>
 			</div>
 		</div>
 	</div>

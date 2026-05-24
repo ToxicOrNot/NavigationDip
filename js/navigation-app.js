@@ -64,6 +64,7 @@ async function init() {
 	hideLegacyGraphControls()
 	setupStaticHandlers()
 	setupScheduleHandlers()
+	setupChatHandlers()
 	setRouteStatus('Загрузка данных навигации...')
 
 	try {
@@ -105,6 +106,9 @@ function cacheDom() {
 	dom.groupSuggestions = document.getElementById('group-suggestions')
 	dom.scheduleStatus = document.querySelector('.schedule-status')
 	dom.scheduleOutput = document.querySelector('.schedule-output')
+	dom.chatForm = document.querySelector('.chat-form')
+	dom.chatInput = document.querySelector('.chat-input')
+	dom.chatMessages = document.querySelector('.chat-messages')
 	dom.routeDetails = document.createElement('div')
 	dom.routeDetails.className = 'route-details'
 	dom.outputWay.after(dom.routeDetails)
@@ -154,6 +158,56 @@ function setupStaticHandlers() {
 		document.querySelector('.button-plus'),
 		document.querySelector('.button-minus')
 	)
+}
+
+function setupChatHandlers() {
+	if (!dom.chatForm || !dom.chatInput || !dom.chatMessages) return
+
+	dom.chatForm.addEventListener('submit', event => {
+		event.preventDefault()
+		sendChatMessage()
+	})
+
+	dom.chatInput.addEventListener('keydown', event => {
+		if (event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault()
+			sendChatMessage()
+		}
+	})
+}
+
+function sendChatMessage() {
+	const text = dom.chatInput.value.trim()
+	if (!text) return
+
+	appendChatMessage('user', text)
+	dom.chatInput.value = ''
+
+	window.setTimeout(() => {
+		appendChatMessage('bot', getPlaceholderBotAnswer(text))
+	}, 250)
+}
+
+function appendChatMessage(role, text) {
+	const message = document.createElement('div')
+	message.className = `chat-message ${role === 'user' ? 'user-message' : 'bot-message'}`
+
+	const author = document.createElement('div')
+	author.className = 'chat-message-author'
+	author.textContent = role === 'user' ? 'Вы' : 'Бот'
+	message.appendChild(author)
+
+	const body = document.createElement('div')
+	body.className = 'chat-message-text'
+	body.textContent = text
+	message.appendChild(body)
+
+	dom.chatMessages.appendChild(message)
+	dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight
+}
+
+function getPlaceholderBotAnswer(userText) {
+	return 'Следующая пара у группы 241-114 - Иностранный язык в кабинетах ПК-610, ПК-435, ПК413'
 }
 
 function setupRouteInputs() {
@@ -1025,8 +1079,10 @@ function getPointerPoint(event) {
 }
 
 function activateMenuTab(tabName) {
-	dom.sectionMain?.classList.toggle('schedule-layout-active', tabName === 'schedule')
+	const expandedPanel = tabName === 'schedule' || tabName === 'chat'
+	dom.sectionMain?.classList.toggle('schedule-layout-active', expandedPanel)
 	dom.menu?.classList.toggle('schedule-menu-active', tabName === 'schedule')
+	dom.menu?.classList.toggle('chat-menu-active', tabName === 'chat')
 	dom.menuTabs.forEach(tab => {
 		tab.classList.toggle('active-tab', tab.dataset.tab === tabName)
 	})
